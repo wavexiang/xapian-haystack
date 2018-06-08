@@ -9,9 +9,9 @@ def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 setup(
-    name='xapian-haystack',
+    name='xapian-haystack-chinese',
     version='2.1.0',
-    description='A Xapian backend for Haystack',
+    description='A Xapian backend for Haystack support chinese',
     long_description=read('README.rst'),
     classifiers=[
         'Development Status :: 5 - Production/Stable',
@@ -29,5 +29,6 @@ setup(
     install_requires=[
         'django>=1.8',
         'django-haystack>=2.5.1',
+        'jieba>=0.38'
     ]
 )

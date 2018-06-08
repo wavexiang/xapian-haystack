@@ -19,6 +19,10 @@ from haystack.exceptions import HaystackError, MissingDependency
 from haystack.inputs import AutoQuery
 from haystack.models import SearchResult
 from haystack.utils import get_identifier, get_model_ct
+import jieba
+import jieba.analyse
+import html
+import xml.etree.ElementTree
 
 NGRAM_MIN_LENGTH = 2
 NGRAM_MAX_LENGTH = 15
@@ -35,12 +39,28 @@ elif sys.version_info[0] == 3:
     DirectoryExistsException = FileExistsError
 
 
+# jieba.analyse.set_stop_words(os.path.join("extension/stop_words.txt"))
+
+
+def remove_tags(text):
+    try:
+        html_text = html.unescape(text)
+        return ''.join(
+            xml.etree.ElementTree.fromstring(
+                html_text
+            ).itertext()
+        )
+    except xml.etree.ElementTree.ParseError:
+        return text
+
+
 class NotSupportedError(Exception):
     """
     When the installed version of Xapian doesn't support something and we have
     the old implementation.
     """
     pass
+
 
 # this maps the different reserved fields to prefixes used to
 # create the database:
@@ -58,11 +78,11 @@ TERM_PREFIXES = {
 MEMORY_DB_NAME = ':memory:'
 
 DEFAULT_XAPIAN_FLAGS = (
-    xapian.QueryParser.FLAG_PHRASE |
-    xapian.QueryParser.FLAG_BOOLEAN |
-    xapian.QueryParser.FLAG_LOVEHATE |
-    xapian.QueryParser.FLAG_WILDCARD |
-    xapian.QueryParser.FLAG_PURE_NOT
+        xapian.QueryParser.FLAG_PHRASE |
+        xapian.QueryParser.FLAG_BOOLEAN |
+        xapian.QueryParser.FLAG_LOVEHATE |
+        xapian.QueryParser.FLAG_WILDCARD |
+        xapian.QueryParser.FLAG_PURE_NOT
 )
 
 # Mapping from `HAYSTACK_DEFAULT_OPERATOR` to Xapian operators
@@ -78,7 +98,7 @@ DEFAULT_CHECK_AT_LEAST = 1000
 
 # field types accepted to be serialized as values in Xapian
 FIELD_TYPES = {'text', 'integer', 'date', 'datetime', 'float', 'boolean',
-    'edge_ngram', 'ngram'}
+               'edge_ngram', 'ngram'}
 
 # defines the format used to store types in Xapian
 # this format ensures datetimes are sorted correctly
@@ -89,6 +109,7 @@ INTEGER_FORMAT = '%012d'
 # texts with positional information
 TERMPOS_DISTANCE = 100
 
+
 class InvalidIndexError(HaystackError):
     """Raised when an index can not be opened."""
     pass
@@ -98,6 +119,7 @@ class XHValueRangeProcessor(xapian.ValueRangeProcessor):
     """
     A Processor to construct ranges of values
     """
+
     def __init__(self, backend):
         self.backend = backend
         xapian.ValueRangeProcessor.__init__(self)
@@ -295,7 +317,7 @@ class XapianSearchBackend(BaseSearchBackend):
             term_generator.set_stemmer(xapian.Stem(self.language))
             try:
                 term_generator.set_stemming_strategy(self.stemming_strategy)
-            except AttributeError:  
+            except AttributeError:
                 # Versions before Xapian 1.2.11 do not support stemming strategies for TermGenerator
                 pass
             if self.include_spelling is True:
@@ -345,10 +367,18 @@ class XapianSearchBackend(BaseSearchBackend):
                 Adds text to the document with positional information
                 and processing (e.g. stemming).
                 """
-                termpos = _add_text(termpos, text, weight, prefix=prefix)
-                termpos = _add_text(termpos, text, weight, prefix='')
-                termpos = _add_literal_text(termpos, text, weight, prefix=prefix)
-                termpos = _add_literal_text(termpos, text, weight, prefix='')
+                # words = jieba.cut_for_search(text)
+                words = jieba.analyse.extract_tags(text)
+                for word in words:
+                    # 过滤掉过长的词
+                    if len(word) > NGRAM_MAX_LENGTH:
+                        continue
+                    # print(word)
+                    termpos = _add_text(termpos, word, weight, prefix=prefix)
+                    termpos = _add_text(termpos, word, weight, prefix='')
+                    termpos = _add_literal_text(termpos, word, weight, prefix=prefix)
+                    termpos = _add_literal_text(termpos, word, weight, prefix='')
+
                 return termpos
 
             def _get_ngram_lengths(value):
@@ -1034,6 +1064,7 @@ class XapianSearchBackend(BaseSearchBackend):
             ],
         }
         """
+
         def next_datetime(previous, gap_value, gap_type):
             year = previous.year
             month = previous.month
@@ -1136,7 +1167,8 @@ class XapianSearchBackend(BaseSearchBackend):
         """
         if spelling_query:
             if ' ' in spelling_query:
-                return ' '.join([database.get_spelling_suggestion(term).decode('utf-8') for term in spelling_query.split()])
+                return ' '.join(
+                    [database.get_spelling_suggestion(term).decode('utf-8') for term in spelling_query.split()])
             else:
                 return database.get_spelling_suggestion(spelling_query).decode('utf-8')
 
@@ -1243,6 +1275,7 @@ class XapianSearchQuery(BaseSearchQuery):
     It acts as an intermediary between the ``SearchQuerySet`` and the
     ``SearchBackend`` itself.
     """
+
     def build_params(self, *args, **kwargs):
         kwargs = super(XapianSearchQuery, self).build_params(*args, **kwargs)
 
@@ -1399,7 +1432,7 @@ class XapianSearchQuery(BaseSearchQuery):
         Assumes term is not a list.
         """
         if field_type == 'text':
-            term_list = term.split()
+            term_list = jieba.cut_for_search(term)
         else:
             term_list = [term]
 
