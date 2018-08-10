@@ -1,5 +1,26 @@
 from __future__ import unicode_literals
 
+import html
+import xml.etree.ElementTree
+import os
+import jieba
+import jieba.analyse
+
+jieba.analyse.set_stop_words(os.path.join("extension/stop_words.txt"))
+
+
+def remove_tags(text):
+    try:
+        html_text = html.unescape(text)
+        return ''.join(
+            xml.etree.ElementTree.fromstring(
+                html_text
+            ).itertext()
+        )
+    except xml.etree.ElementTree.ParseError:
+        return text
+
+
 import datetime
 import pickle
 import os
@@ -19,10 +40,6 @@ from haystack.exceptions import HaystackError, MissingDependency
 from haystack.inputs import AutoQuery
 from haystack.models import SearchResult
 from haystack.utils import get_identifier, get_model_ct
-import jieba
-import jieba.analyse
-import html
-import xml.etree.ElementTree
 
 NGRAM_MIN_LENGTH = 2
 NGRAM_MAX_LENGTH = 15
@@ -37,21 +54,6 @@ if sys.version_info[0] == 2:
     DirectoryExistsException = OSError
 elif sys.version_info[0] == 3:
     DirectoryExistsException = FileExistsError
-
-
-# jieba.analyse.set_stop_words(os.path.join("extension/stop_words.txt"))
-
-
-def remove_tags(text):
-    try:
-        html_text = html.unescape(text)
-        return ''.join(
-            xml.etree.ElementTree.fromstring(
-                html_text
-            ).itertext()
-        )
-    except xml.etree.ElementTree.ParseError:
-        return text
 
 
 class NotSupportedError(Exception):
@@ -334,6 +336,7 @@ class XapianSearchBackend(BaseSearchBackend):
                 end_term = '%s$' % prefix
                 # add begin
                 document.add_posting(start_term, termpos, weight)
+
                 # add text
                 term_generator.index_text(text, weight, prefix)
                 termpos = term_generator.get_termpos()
@@ -367,18 +370,25 @@ class XapianSearchBackend(BaseSearchBackend):
                 Adds text to the document with positional information
                 and processing (e.g. stemming).
                 """
+                if isinstance(text, list):
+                    text = _to_xapian_term(text)
+                    termpos = _add_text(termpos, text, weight, prefix=prefix)
+                    termpos = _add_text(termpos, text, weight, prefix='')
+                    termpos = _add_literal_text(termpos, text, weight, prefix=prefix)
+                    termpos = _add_literal_text(termpos, text, weight, prefix='')
+                    return termpos
+                text = remove_tags(text)
                 # words = jieba.cut_for_search(text)
                 words = jieba.analyse.extract_tags(text)
                 for word in words:
                     # 过滤掉过长的词
-                    if len(word) > NGRAM_MAX_LENGTH:
+                    if len(word) > 5:
                         continue
                     # print(word)
                     termpos = _add_text(termpos, word, weight, prefix=prefix)
                     termpos = _add_text(termpos, word, weight, prefix='')
                     termpos = _add_literal_text(termpos, word, weight, prefix=prefix)
                     termpos = _add_literal_text(termpos, word, weight, prefix='')
-
                 return termpos
 
             def _get_ngram_lengths(value):
@@ -487,10 +497,10 @@ class XapianSearchBackend(BaseSearchBackend):
                         if field['multi_valued'] == 'false':
                             document.add_value(field['column'], _term_to_xapian_value(value, field['type']))
                         else:
-                            for t in value:
-                                # add the exact match of each value
-                                term = _to_xapian_term(t)
-                                termpos = add_text(termpos, prefix, term, weight)
+                            if value is None:
+                                continue
+                            # term = _to_xapian_term(value)
+                            termpos = add_text(termpos, prefix, value, weight)
                             continue
 
                         term = _to_xapian_term(value)
@@ -1289,7 +1299,7 @@ class XapianSearchQuery(BaseSearchQuery):
             query = xapian.Query('')
         else:
             query = self._query_from_search_node(self.query_filter)
-
+        # print(query)
         if self.models:
             subqueries = [
                 xapian.Query(
@@ -1468,8 +1478,11 @@ class XapianSearchQuery(BaseSearchQuery):
         with positional order.
 
         Assumes term is not a list.
+
+        2018.6.11 multi_valued 字段改为term查询
         """
-        if field_type == 'text' and field_name not in (DJANGO_CT,):
+        field = self.backend.schema[self.backend.column[field_name]]
+        if field_type == 'text' and field_name not in (DJANGO_CT,) and field['multi_valued'] == 'false':
             term = '^ %s $' % term
             query = self._phrase_query(term.split(), field_name, field_type)
         else:
